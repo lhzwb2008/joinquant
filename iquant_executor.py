@@ -79,36 +79,26 @@ def update_order_status(pk_list):
 
 def init(ContextInfo):
     """iQuant初始化函数"""
-    # 设置定时运行，每天14:00执行一次
-    ContextInfo.run_time("check_orders", "1nDay", "2019-10-14 14:00:00", "SH")
+    # 设置定时运行，每天14:01执行一次
+    ContextInfo.run_time("check_orders", "1nDay", "2024-01-01 14:00:00", "SH")
     
     # 设置账户
     account = "xxxxxxxx"  # 替换为实际账户
     ContextInfo.accID = str(account)
     ContextInfo.set_account(ContextInfo.accID)
     
-    # 初始化标志位
-    ContextInfo.order_executed_today = False
-    
     print('iQuant订单执行器初始化完成')
 
 def check_orders(ContextInfo):
-    """每天14:00检查并执行订单"""
+    """每天14:01检查并执行订单"""
     current_time = datetime.now()
     current_hour = current_time.hour
+    current_minute = current_time.minute
     current_date = current_time.strftime('%Y-%m-%d')
     
-    # 只在14:00执行
-    if current_hour != 14:
+    # 只在14:01执行
+    if current_hour != 14 or current_minute != 1:
         return
-    
-    # 检查今天是否已经执行过
-    if hasattr(ContextInfo, 'last_execute_date') and ContextInfo.last_execute_date == current_date:
-        if ContextInfo.order_executed_today:
-            return
-    else:
-        ContextInfo.last_execute_date = current_date
-        ContextInfo.order_executed_today = False
     
     # 查询今天未处理的订单
     query_str = """SELECT * FROM `order`.`joinquant_stock` WHERE if_deal = 0 AND DATE(tradetime) = '%s'""" % current_date
@@ -175,7 +165,6 @@ def check_orders(ContextInfo):
         # 更新成功执行的订单状态
         if success_orders:
             update_order_status(success_orders)
-            ContextInfo.order_executed_today = True
         
     except Exception as e:
         print('处理订单时发生错误：%s' % str(e))
