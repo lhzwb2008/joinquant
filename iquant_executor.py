@@ -1,17 +1,26 @@
-# -*- coding: utf-8 -*-
-"""
-iQuant读取聚宽订单信息并执行交易
-"""
+# coding: utf-8
+import json
 import pymysql
 import pandas as pd
 from datetime import datetime, time
 
+def init(ContextInfo):
+    global position_flag, delete_flag, order_flag
+    
+    ContextInfo.run_time("handlebar", "3nSecond", "2024-10-14 13:56:00", "SH")
+    
+    position_flag = False
+    delete_flag = True
+    order_flag = True
+    account = "410038217129"
+    ContextInfo.accID = str(account)
+    ContextInfo.set_account(ContextInfo.accID)
+    
+    print('init')
+
 def get_data(query_str):
-    """从数据库获取订单信息"""
     today_date = datetime.today().date()
     today_date = today_date.strftime('%Y-%m-%d')
-    
-    # 数据库连接参数
     host = "sh-cdb-kgv8etuq.sql.tencentcdb.com"
     port = 23333
     user = "root"
@@ -19,22 +28,21 @@ def get_data(query_str):
     database = 'order'
     
     try:
-        # 连接 MySQL 数据库
+        # Connect to MySQL database
         conn = pymysql.connect(host=host, port=port, user=user,
                                password=password, database=database,
-                               charset='utf8mb4')
+                               charset='utf8')
         cursor = conn.cursor()
-
-        # 执行 SQL 查询语句
+        
+        # Execute SQL query
         cursor.execute(query_str)
-        # 获取查询结果
+        # Get query results
         result = cursor.fetchall()
-
-        # 将查询结果转化为 Pandas dataframe 对象
+        
+        # Convert query results to Pandas dataframe
         if result:
             res = pd.DataFrame([result[i] for i in range(len(result))], 
                               columns=[i[0] for i in cursor.description])
-            # 筛选今天的订单
             res['tradedate'] = res['tradetime'].apply(lambda x: x.strftime('%Y-%m-%d'))
             res = res[res['tradedate'] == today_date]
         else:
@@ -45,14 +53,11 @@ def get_data(query_str):
         
         return res
     except Exception as e:
-        print('数据库查询错误：%s' % str(e))
+        print('Database query error: {}'.format(e))
         return pd.DataFrame()
 
-def update_order_status(pk_list):
-    """更新订单状态为已处理"""
-    if not pk_list:
-        return
-        
+def delete_data():
+    query_str = """DELETE FROM `order`.joinquant_stock WHERE DATE(tradetime) < CURDATE()"""
     host = "sh-cdb-kgv8etuq.sql.tencentcdb.com"
     port = 23333
     user = "root"
@@ -60,115 +65,99 @@ def update_order_status(pk_list):
     database = 'order'
     
     try:
+        # Connect to MySQL database
         conn = pymysql.connect(host=host, port=port, user=user,
                                password=password, database=database,
-                               charset='utf8mb4')
+                               charset='utf8')
         cursor = conn.cursor()
         
-        # 批量更新订单状态
-        for pk in pk_list:
-            query_str = "UPDATE `order`.`joinquant_stock` SET if_deal = 1 WHERE pk = '%s'" % pk
-            cursor.execute(query_str)
-        
+        # Execute SQL query
+        cursor.execute(query_str)
         conn.commit()
         cursor.close()
         conn.close()
-        print('已更新%d条订单状态' % len(pk_list))
+        print('Deleted old data from database')
     except Exception as e:
-        print('更新订单状态错误：%s' % str(e))
+        print('Error: {}'.format(e))
 
-def init(ContextInfo):
-    """iQuant初始化函数"""
-    # 设置定时运行，每天14:01执行一次
-    ContextInfo.run_time("check_orders", "1nDay", "2024-01-01 14:00:00", "SH")
-    
-    # 设置账户
-    account = "xxxxxxxx"  # 替换为实际账户
-    ContextInfo.accID = str(account)
-    ContextInfo.set_account(ContextInfo.accID)
-    
-    print('iQuant订单执行器初始化完成')
-
-def check_orders(ContextInfo):
-    """每天14:01检查并执行订单"""
-    current_time = datetime.now()
-    current_hour = current_time.hour
-    current_minute = current_time.minute
-    current_date = current_time.strftime('%Y-%m-%d')
-    
-    # 只在14:01执行
-    if current_hour != 14 or current_minute != 1:
-        return
-    
-    # 查询今天未处理的订单
-    query_str = """SELECT * FROM `order`.`joinquant_stock` WHERE if_deal = 0 AND DATE(tradetime) = '%s'""" % current_date
-    
-    try:
-        orders_df = get_data(query_str)
-        
-        if len(orders_df) == 0:
-            print('今天没有待处理的订单')
-            return
-        
-        print('发现%d条待处理订单' % len(orders_df))
-        
-        # 获取当前持仓
-        position_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'position')
-        current_positions = {}
-        for pos in position_info:
-            if pos.m_nVolume > 0:
-                current_positions[pos.m_strInstrumentID] = pos.m_nVolume
-        
-        # 成功执行的订单列表
-        success_orders = []
-        
-        # 处理每个订单
-        for idx, order in orders_df.iterrows():
-            pk = order['pk']
-            code = order['code']
-            ordertype = order['ordertype']
-            order_values = order['order_values']
-            
-            if ordertype == '买':
-                # 计算买入数量
-                if order_values == 0:  # 如果聚宽没有指定数量，根据资金计算
-                    acc_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'account')
-                    available_cash = acc_info[0].m_dAvailable
-                    # 假设平均分配资金
-                    buy_orders = orders_df[orders_df['ordertype'] == '买']
-                    if len(buy_orders) > 0:
-                        per_stock_cash = available_cash / len(buy_orders)
-                        # 获取最新价格
-                        price_data = ContextInfo.get_market_data(['close'], stock_code=[code], period='1d', count=1)
-                        if price_data and code in price_data:
-                            last_price = price_data[code].iloc[-1]
-                            order_values = int(per_stock_cash / last_price / 100) * 100  # 按手取整
-                
-                if order_values > 0:
-                    # 执行买入
-                    order_id = passorder(23, 1101, ContextInfo.accID, code, 11, -1, order_values, '', 2, '', ContextInfo)
-                    if order_id:
-                        print('买入 %s，数量：%d' % (code, order_values))
-                        success_orders.append(pk)
-                
-            elif ordertype == '卖':
-                # 检查持仓
-                if code in current_positions:
-                    sell_amount = min(order_values, current_positions[code])
-                    if sell_amount > 0:
-                        # 执行卖出
-                        order_id = passorder(24, 1101, ContextInfo.accID, code, 11, -1, sell_amount, '', 2, '', ContextInfo)
-                        if order_id:
-                            print('卖出 %s，数量：%d' % (code, sell_amount))
-                            success_orders.append(pk)
-        
-        # 更新成功执行的订单状态
-        if success_orders:
-            update_order_status(success_orders)
-        
-    except Exception as e:
-        print('处理订单时发生错误：%s' % str(e))
 
 def handlebar(ContextInfo):
-    """主函数"""
-    pass 
+    global position_flag, delete_flag, order_flag
+    
+    current_time = datetime.now().time()
+    
+    # Set start and end times
+    morning_start_time = time(9, 30, 5)
+    morning_end_time = time(9, 32)
+    
+    morning_delete_database_start = time(11, 29)
+    morning_delete_database_end = time(11, 30)
+    
+    afternoon_delete_database_start = time(15, 25)
+    afternoon_delete_database_end = time(15, 30)
+    
+    buy_direction = 23
+    sell_direction = 24
+    SALE3 = 2
+    BUY3 = 8
+    
+    day_start_time = time(9, 29)
+    day_end_time = time(15, 30)
+    
+    if day_start_time <= current_time and current_time <= day_end_time:
+        
+        query_str = """SELECT * FROM `order`.joinquant_stock WHERE if_deal = 0"""
+        
+        try:
+            orders_df = get_data(query_str)
+        except Exception as e:
+            orders_df = pd.DataFrame()
+            print('Error occurred: {}'.format(e))
+        
+        if len(orders_df) < 1:
+            return
+        
+        if morning_start_time <= current_time and current_time <= morning_end_time:
+            
+            position_flag = True
+            delete_flag = True
+            
+            if order_flag == False:
+                return
+            
+            # Get current positions
+            position_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'position')
+            position_code = []
+            position_volume = {}
+            if len(position_info) > 0:
+                for ele in position_info:
+                    if ele.m_nVolume > 0:
+                        position_code.append(ele.m_strInstrumentID)
+                        position_volume[ele.m_strInstrumentID] = ele.m_nVolume
+            
+            # Process orders
+            for idx, order in orders_df.iterrows():
+                code = order['code']
+                ordertype = order['ordertype']
+                order_values = int(order['order_values'])
+                
+                if ordertype == u'\u4e70':  # Buy
+                    if order_values > 0:
+                        passorder(buy_direction, 1101, ContextInfo.accID, code, 11, -1, order_values, '', 2, '', ContextInfo)
+                        print('Buy order: {} x {}'.format(code, order_values))
+                
+                elif ordertype == u'\u5356':  # Sell
+                    if code in position_volume and position_volume[code] > 0:
+                        sell_amount = min(order_values, position_volume[code])
+                        if sell_amount > 0:
+                            passorder(sell_direction, 1101, ContextInfo.accID, code, 11, -1, sell_amount, '', 2, '', ContextInfo)
+                            print('Sell order: {} x {}'.format(code, sell_amount))
+            
+            order_flag = False
+        
+        elif (morning_delete_database_start < current_time < morning_delete_database_end) or \
+             (afternoon_delete_database_start < current_time < afternoon_delete_database_end):
+            order_flag = True
+            if delete_flag == True:
+                delete_data()
+                delete_flag = False
