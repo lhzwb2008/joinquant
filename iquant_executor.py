@@ -1,13 +1,15 @@
-# coding: utf-8
 import json
 import pymysql
 import pandas as pd
-from datetime import datetime, time
+import time
+from datetime import datetime, time as dt_time
+
+# Debug mode configuration
+DEBUG_MODE = True  # Set to False for production
+DEBUG_SHARES = 100  # Number of shares to trade in debug mode
 
 def init(ContextInfo):
     global position_flag, delete_flag, order_flag
-    
-    ContextInfo.run_time("handlebar", "3nSecond", "2024-10-14 13:56:00", "SH")
     
     position_flag = False
     delete_flag = True
@@ -16,7 +18,12 @@ def init(ContextInfo):
     ContextInfo.accID = str(account)
     ContextInfo.set_account(ContextInfo.accID)
     
-    print('init')
+    if DEBUG_MODE:
+        print('init - start continuous monitoring mode (DEBUG MODE ON - {} shares per order)'.format(DEBUG_SHARES))
+    else:
+        print('init - start continuous monitoring mode (PRODUCTION MODE)')
+    
+    start_continuous_monitoring(ContextInfo)
 
 def get_data(query_str):
     today_date = datetime.today().date()
@@ -28,18 +35,14 @@ def get_data(query_str):
     database = 'order'
     
     try:
-        # Connect to MySQL database
         conn = pymysql.connect(host=host, port=port, user=user,
                                password=password, database=database,
                                charset='utf8')
         cursor = conn.cursor()
         
-        # Execute SQL query
         cursor.execute(query_str)
-        # Get query results
         result = cursor.fetchall()
         
-        # Convert query results to Pandas dataframe
         if result:
             res = pd.DataFrame([result[i] for i in range(len(result))], 
                               columns=[i[0] for i in cursor.description])
@@ -65,13 +68,11 @@ def delete_data():
     database = 'order'
     
     try:
-        # Connect to MySQL database
         conn = pymysql.connect(host=host, port=port, user=user,
                                password=password, database=database,
                                charset='utf8')
         cursor = conn.cursor()
         
-        # Execute SQL query
         cursor.execute(query_str)
         conn.commit()
         cursor.close()
@@ -80,84 +81,138 @@ def delete_data():
     except Exception as e:
         print('Error: {}'.format(e))
 
-
-def handlebar(ContextInfo):
-    global position_flag, delete_flag, order_flag
+def mark_order_as_executed(order_id):
+    host = "sh-cdb-kgv8etuq.sql.tencentcdb.com"
+    port = 23333
+    user = "root"
+    password = "Hello2025"
+    database = 'order'
     
+    try:
+        conn = pymysql.connect(host=host, port=port, user=user,
+                               password=password, database=database,
+                               charset='utf8')
+        cursor = conn.cursor()
+        
+        update_query = """UPDATE `order`.joinquant_stock SET if_deal = 1 WHERE id = %s"""
+        cursor.execute(update_query, (order_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print('Order {} marked as executed'.format(order_id))
+    except Exception as e:
+        print('Failed to mark order execution status: {}'.format(e))
+
+def execute_trade_orders(ContextInfo):
     current_time = datetime.now().time()
     
-    # Set start and end times
-    morning_start_time = time(9, 30, 5)
-    morning_end_time = time(9, 32)
+    day_start_time = dt_time(9, 25)
+    day_end_time = dt_time(15, 30)
     
-    morning_delete_database_start = time(11, 29)
-    morning_delete_database_end = time(11, 30)
-    
-    afternoon_delete_database_start = time(15, 25)
-    afternoon_delete_database_end = time(15, 30)
+    if not (day_start_time <= current_time <= day_end_time):
+        return False
     
     buy_direction = 23
     sell_direction = 24
-    SALE3 = 2
-    BUY3 = 8
     
-    day_start_time = time(9, 29)
-    day_end_time = time(15, 30)
+    query_str = """SELECT * FROM `order`.joinquant_stock WHERE if_deal = 0"""
     
-    if day_start_time <= current_time and current_time <= day_end_time:
+    try:
+        orders_df = get_data(query_str)
+    except Exception as e:
+        orders_df = pd.DataFrame()
+        print('Error occurred: {}'.format(e))
+        return False
+    
+    if len(orders_df) < 1:
+        return False
+    
+    print('Found {} pending orders'.format(len(orders_df)))
+    
+    position_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'position')
+    position_code = []
+    position_volume = {}
+    if len(position_info) > 0:
+        for ele in position_info:
+            if ele.m_nVolume > 0:
+                position_code.append(ele.m_strInstrumentID)
+                position_volume[ele.m_strInstrumentID] = ele.m_nVolume
+    
+    executed_orders = []
+    
+    for idx, order in orders_df.iterrows():
+        code = order['code']
+        ordertype = order['ordertype']
+        order_values = int(order['order_values'])
+        order_id = order.get('id', None)
         
-        query_str = """SELECT * FROM `order`.joinquant_stock WHERE if_deal = 0"""
+        # Apply debug mode limitation
+        if DEBUG_MODE:
+            original_order_values = order_values
+            order_values = DEBUG_SHARES
+            print('DEBUG MODE: Order {} changed from {} to {} shares'.format(code, original_order_values, order_values))
         
         try:
-            orders_df = get_data(query_str)
+            if ordertype == u'\u4e70':  # Buy
+                if order_values > 0:
+                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 11, -1, order_values, '', 2, '', ContextInfo)
+                    if DEBUG_MODE:
+                        print('Execute buy order (DEBUG): {} x {} shares'.format(code, order_values))
+                    else:
+                        print('Execute buy order: {} x {}'.format(code, order_values))
+                    executed_orders.append(order_id)
+            
+            elif ordertype == u'\u5356':  # Sell
+                if code in position_volume and position_volume[code] > 0:
+                    sell_amount = min(order_values, position_volume[code])
+                    if sell_amount > 0:
+                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 11, -1, sell_amount, '', 2, '', ContextInfo)
+                        if DEBUG_MODE:
+                            print('Execute sell order (DEBUG): {} x {} shares'.format(code, sell_amount))
+                        else:
+                            print('Execute sell order: {} x {}'.format(code, sell_amount))
+                        executed_orders.append(order_id)
+                        position_volume[code] -= sell_amount
+                else:
+                    print('Warning: Insufficient position for {} to sell {} shares'.format(code, order_values))
+        
         except Exception as e:
-            orders_df = pd.DataFrame()
-            print('Error occurred: {}'.format(e))
-        
-        if len(orders_df) < 1:
-            return
-        
-        if morning_start_time <= current_time and current_time <= morning_end_time:
+            print('Failed to execute order {}: {}'.format(code, e))
+    
+    for order_id in executed_orders:
+        if order_id:
+            mark_order_as_executed(order_id)
+    
+    return len(executed_orders) > 0
+
+def start_continuous_monitoring(ContextInfo):
+    print('Start continuous monitoring for trading signals...')
+    
+    last_cleanup_date = datetime.now().date()
+    
+    while True:
+        try:
+            current_time = datetime.now().time()
+            current_date = datetime.now().date()
             
-            position_flag = True
-            delete_flag = True
-            
-            if order_flag == False:
-                return
-            
-            # Get current positions
-            position_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'position')
-            position_code = []
-            position_volume = {}
-            if len(position_info) > 0:
-                for ele in position_info:
-                    if ele.m_nVolume > 0:
-                        position_code.append(ele.m_strInstrumentID)
-                        position_volume[ele.m_strInstrumentID] = ele.m_nVolume
-            
-            # Process orders
-            for idx, order in orders_df.iterrows():
-                code = order['code']
-                ordertype = order['ordertype']
-                order_values = int(order['order_values'])
-                
-                if ordertype == u'\u4e70':  # Buy
-                    if order_values > 0:
-                        passorder(buy_direction, 1101, ContextInfo.accID, code, 11, -1, order_values, '', 2, '', ContextInfo)
-                        print('Buy order: {} x {}'.format(code, order_values))
-                
-                elif ordertype == u'\u5356':  # Sell
-                    if code in position_volume and position_volume[code] > 0:
-                        sell_amount = min(order_values, position_volume[code])
-                        if sell_amount > 0:
-                            passorder(sell_direction, 1101, ContextInfo.accID, code, 11, -1, sell_amount, '', 2, '', ContextInfo)
-                            print('Sell order: {} x {}'.format(code, sell_amount))
-            
-            order_flag = False
-        
-        elif (morning_delete_database_start < current_time < morning_delete_database_end) or \
-             (afternoon_delete_database_start < current_time < afternoon_delete_database_end):
-            order_flag = True
-            if delete_flag == True:
+            cleanup_time = dt_time(15, 35)
+            if (current_time >= cleanup_time and 
+                current_date > last_cleanup_date):
+                print('Execute daily data cleanup...')
                 delete_data()
-                delete_flag = False
+                last_cleanup_date = current_date
+            
+            if execute_trade_orders(ContextInfo):
+                print('Trade orders executed')
+            
+            time.sleep(2)
+            
+        except KeyboardInterrupt:
+            print('Monitoring stopped')
+            break
+        except Exception as e:
+            print('Error during monitoring: {}'.format(e))
+            time.sleep(5)
+
+def handlebar(ContextInfo):
+    pass
