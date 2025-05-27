@@ -94,14 +94,44 @@ def mark_order_as_executed(order_id):
                                charset='utf8')
         cursor = conn.cursor()
         
-        update_query = """UPDATE `order`.joinquant_stock SET if_deal = 1 WHERE id = %s"""
+        update_query = """UPDATE `order`.joinquant_stock SET if_deal = 1 WHERE pk = %s"""
+        cursor.execute(update_query, (order_id,))
+        affected_rows = cursor.rowcount
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        if affected_rows > 0:
+            print('Order {} marked as executed'.format(order_id))
+            return True
+        else:
+            print('Warning: Order {} not found or already executed'.format(order_id))
+            return False
+    except Exception as e:
+        print('Failed to mark order execution status: {}'.format(e))
+        return False
+
+def revert_order_status(order_id):
+    host = "sh-cdb-kgv8etuq.sql.tencentcdb.com"
+    port = 23333
+    user = "root"
+    password = "Hello2025"
+    database = 'order'
+    
+    try:
+        conn = pymysql.connect(host=host, port=port, user=user,
+                               password=password, database=database,
+                               charset='utf8')
+        cursor = conn.cursor()
+        
+        update_query = """UPDATE `order`.joinquant_stock SET if_deal = 0 WHERE pk = %s"""
         cursor.execute(update_query, (order_id,))
         conn.commit()
         cursor.close()
         conn.close()
-        print('Order {} marked as executed'.format(order_id))
+        print('Order {} status reverted to pending'.format(order_id))
     except Exception as e:
-        print('Failed to mark order execution status: {}'.format(e))
+        print('Failed to revert order status: {}'.format(e))
 
 def execute_trade_orders(ContextInfo):
     current_time = datetime.now().time()
@@ -144,7 +174,17 @@ def execute_trade_orders(ContextInfo):
         code = order['code']
         ordertype = order['ordertype']
         order_values = int(order['order_values'])
-        order_id = order.get('id', None)
+        # Use 'pk' as the primary key field
+        order_id = order.get('pk', None)
+        
+        if not order_id:
+            print('Warning: Order missing PK, skipping')
+            continue
+        
+        # Mark order as executed BEFORE placing order to prevent duplicates
+        if not mark_order_as_executed(order_id):
+            print('Failed to mark order {} as executed, skipping to prevent duplicates'.format(order_id))
+            continue
         
         # Apply debug mode limitation
         if DEBUG_MODE:
@@ -155,7 +195,7 @@ def execute_trade_orders(ContextInfo):
         try:
             if ordertype == u'\u4e70':  # Buy
                 if order_values > 0:
-                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 11, -1, order_values, '', 2, '', ContextInfo)
+                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 5, 0, order_values, '', 2, '', ContextInfo)
                     if DEBUG_MODE:
                         print('Execute buy order (DEBUG): {} x {} shares'.format(code, order_values))
                     else:
@@ -166,7 +206,7 @@ def execute_trade_orders(ContextInfo):
                 if code in position_volume and position_volume[code] > 0:
                     sell_amount = min(order_values, position_volume[code])
                     if sell_amount > 0:
-                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 11, -1, sell_amount, '', 2, '', ContextInfo)
+                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 5, 0, sell_amount, '', 2, '', ContextInfo)
                         if DEBUG_MODE:
                             print('Execute sell order (DEBUG): {} x {} shares'.format(code, sell_amount))
                         else:
@@ -178,10 +218,8 @@ def execute_trade_orders(ContextInfo):
         
         except Exception as e:
             print('Failed to execute order {}: {}'.format(code, e))
-    
-    for order_id in executed_orders:
-        if order_id:
-            mark_order_as_executed(order_id)
+            # If order execution failed, try to revert the database status
+            revert_order_status(order_id)
     
     return len(executed_orders) > 0
 
