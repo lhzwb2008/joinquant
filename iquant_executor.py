@@ -4,9 +4,8 @@ import pandas as pd
 import time
 from datetime import datetime, time as dt_time
 
-# Debug mode configuration
-DEBUG_MODE = True  # Set to False for production
-DEBUG_SHARES = 100  # Number of shares to trade in debug mode
+# Trading configuration
+EXECUTION_RATIO = 0.1  # Execute ratio of original order quantity (0.1 = 10%)
 
 def init(ContextInfo):
     global position_flag, delete_flag, order_flag
@@ -18,10 +17,7 @@ def init(ContextInfo):
     ContextInfo.accID = str(account)
     ContextInfo.set_account(ContextInfo.accID)
     
-    if DEBUG_MODE:
-        print('init - start continuous monitoring mode (DEBUG MODE ON - {} shares per order)'.format(DEBUG_SHARES))
-    else:
-        print('init - start continuous monitoring mode (PRODUCTION MODE)')
+    print('init - start continuous monitoring mode (EXECUTION RATIO: {}%)'.format(int(EXECUTION_RATIO * 100)))
     
     start_continuous_monitoring(ContextInfo)
 
@@ -186,20 +182,29 @@ def execute_trade_orders(ContextInfo):
             print('Failed to mark order {} as executed, skipping to prevent duplicates'.format(order_id))
             continue
         
-        # Apply debug mode limitation
-        if DEBUG_MODE:
-            original_order_values = order_values
-            order_values = DEBUG_SHARES
-            print('DEBUG MODE: Order {} changed from {} to {} shares'.format(code, original_order_values, order_values))
+        # Apply execution ratio
+        original_order_values = order_values
+        order_values = int(order_values * EXECUTION_RATIO)
+        
+        # Round down to nearest 100
+        order_values = (order_values // 100) * 100
+        
+        # Skip if less than 100 shares
+        if order_values < 100:
+            print('Order {} skipped: {} shares after ratio adjustment is less than 100'.format(
+                code, int(original_order_values * EXECUTION_RATIO)))
+            # Revert the order status since we're not executing it
+            revert_order_status(order_id)
+            continue
+        
+        print('Order {} adjusted from {} to {} shares (ratio: {}%)'.format(
+            code, original_order_values, order_values, int(EXECUTION_RATIO * 100)))
         
         try:
             if ordertype == u'\u4e70':  # Buy
                 if order_values > 0:
                     result = passorder(buy_direction, 1101, ContextInfo.accID, code, 5, 0, order_values, '', 2, '', ContextInfo)
-                    if DEBUG_MODE:
-                        print('Execute buy order (DEBUG): {} x {} shares'.format(code, order_values))
-                    else:
-                        print('Execute buy order: {} x {}'.format(code, order_values))
+                    print('Execute buy order: {} x {} shares'.format(code, order_values))
                     executed_orders.append(order_id)
             
             elif ordertype == u'\u5356':  # Sell
@@ -207,10 +212,7 @@ def execute_trade_orders(ContextInfo):
                     sell_amount = min(order_values, position_volume[code])
                     if sell_amount > 0:
                         result = passorder(sell_direction, 1101, ContextInfo.accID, code, 5, 0, sell_amount, '', 2, '', ContextInfo)
-                        if DEBUG_MODE:
-                            print('Execute sell order (DEBUG): {} x {} shares'.format(code, sell_amount))
-                        else:
-                            print('Execute sell order: {} x {}'.format(code, sell_amount))
+                        print('Execute sell order: {} x {} shares'.format(code, sell_amount))
                         executed_orders.append(order_id)
                         position_volume[code] -= sell_amount
                 else:

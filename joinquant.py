@@ -28,10 +28,10 @@ class JoinQuantTable(Base):
 def initialize(context):
     set_benchmark('000001.XSHG')
     set_option('use_real_price', True)
-    set_slippage(PriceRelatedSlippage(0.00246),type='stock')    
-    set_order_cost(OrderCost(open_tax=0, close_tax=0.001, 
+    set_slippage(PriceRelatedSlippage(0.001))  
+    set_order_cost(OrderCost(open_tax=0, close_tax=0.0005, 
                    open_commission=0.0003, close_commission=0.0003, 
-                   close_today_commission=0, min_commission=5), type='stock')
+                   close_today_commission=0, min_commission=0), type='stock')
     log.set_level('order', 'error')
     
     g.stock_num = 12
@@ -41,6 +41,7 @@ def initialize(context):
     run_daily(prepare_stock_list, time='9:05')
     run_daily(check_limit_up, time='13:54')
     run_weekly(weekly_adjustment, weekday=1, time='13:55', reference_security='000300.XSHG')
+
 
 def get_dividend_ratio_filter_list(context, stock_list, sort, p1, p2):
     time1 = context.previous_date
