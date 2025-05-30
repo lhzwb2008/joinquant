@@ -203,7 +203,7 @@ def execute_trade_orders(ContextInfo):
         try:
             if ordertype == u'\u4e70':  # Buy
                 if order_values > 0:
-                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 5, 0, order_values, '', 2, '', ContextInfo)
+                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 2, 0, order_values, '', 2, '', ContextInfo)
                     print('Execute buy order: {} x {} shares'.format(code, order_values))
                     executed_orders.append(order_id)
             
@@ -211,7 +211,7 @@ def execute_trade_orders(ContextInfo):
                 if code in position_volume and position_volume[code] > 0:
                     sell_amount = min(order_values, position_volume[code])
                     if sell_amount > 0:
-                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 5, 0, sell_amount, '', 2, '', ContextInfo)
+                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 8, 0, sell_amount, '', 2, '', ContextInfo)
                         print('Execute sell order: {} x {} shares'.format(code, sell_amount))
                         executed_orders.append(order_id)
                         position_volume[code] -= sell_amount
