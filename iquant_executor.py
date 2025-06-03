@@ -5,7 +5,7 @@ import time
 from datetime import datetime, time as dt_time
 
 # Trading configuration
-EXECUTION_RATIO = 0.1  # Execute ratio of original order quantity (0.1 = 10%)
+EXECUTION_RATIO = 1  # Execute ratio of original order quantity (0.1 = 10%)
 
 def init(ContextInfo):
     global position_flag, delete_flag, order_flag
@@ -13,13 +13,25 @@ def init(ContextInfo):
     position_flag = False
     delete_flag = True
     order_flag = True
-    account = "330261001128"
+    account = "330200009169"
     ContextInfo.accID = str(account)
     ContextInfo.set_account(ContextInfo.accID)
     
     print('init - start continuous monitoring mode (EXECUTION RATIO: {}%)'.format(int(EXECUTION_RATIO * 100)))
     
     start_continuous_monitoring(ContextInfo)
+
+def normalize_stock_code(code):
+    """
+    Normalize stock code format
+    Convert code with suffix (e.g. 603216.SH) to pure number format (e.g. 603216)
+    """
+    if isinstance(code, str):
+        # Remove suffix if code contains dot
+        if '.' in code:
+            return code.split('.')[0]
+        return code
+    return str(code)
 
 def get_data(query_str):
     today_date = datetime.today().date()
@@ -159,15 +171,27 @@ def execute_trade_orders(ContextInfo):
     position_code = []
     position_volume = {}
     if len(position_info) > 0:
+        print('Position info found: {} positions'.format(len(position_info)))
         for ele in position_info:
             if ele.m_nVolume > 0:
-                position_code.append(ele.m_strInstrumentID)
-                position_volume[ele.m_strInstrumentID] = ele.m_nVolume
+                # Print raw code format for debugging
+                print('Position: {} (raw code: {}, volume: {})'.format(
+                    ele.m_strInstrumentName if hasattr(ele, 'm_strInstrumentName') else 'Unknown',
+                    ele.m_strInstrumentID,
+                    ele.m_nVolume
+                ))
+                # Normalize position code format
+                normalized_code = normalize_stock_code(ele.m_strInstrumentID)
+                position_code.append(normalized_code)
+                position_volume[normalized_code] = ele.m_nVolume
     
     executed_orders = []
     
     for idx, order in orders_df.iterrows():
         code = order['code']
+        # Normalize order stock code
+        normalized_code = normalize_stock_code(code)
+        print('Processing order: {} -> normalized: {}'.format(code, normalized_code))
         ordertype = order['ordertype']
         order_values = int(order['order_values'])
         # Use 'pk' as the primary key field
@@ -203,23 +227,25 @@ def execute_trade_orders(ContextInfo):
         try:
             if ordertype == u'\u4e70':  # Buy
                 if order_values > 0:
-                    result = passorder(buy_direction, 1101, ContextInfo.accID, code, 2, 0, order_values, '', 2, '', ContextInfo)
-                    print('Execute buy order: {} x {} shares'.format(code, order_values))
+                    # Use normalized code for trading
+                    result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 2, 0, order_values, '', 2, '', ContextInfo)
+                    print('Execute buy order: {} x {} shares'.format(normalized_code, order_values))
                     executed_orders.append(order_id)
             
             elif ordertype == u'\u5356':  # Sell
-                if code in position_volume and position_volume[code] > 0:
-                    sell_amount = min(order_values, position_volume[code])
+                # Use normalized code to check position
+                if normalized_code in position_volume and position_volume[normalized_code] > 0:
+                    sell_amount = min(order_values, position_volume[normalized_code])
                     if sell_amount > 0:
-                        result = passorder(sell_direction, 1101, ContextInfo.accID, code, 8, 0, sell_amount, '', 2, '', ContextInfo)
-                        print('Execute sell order: {} x {} shares'.format(code, sell_amount))
+                        result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 8, 0, sell_amount, '', 2, '', ContextInfo)
+                        print('Execute sell order: {} x {} shares'.format(normalized_code, sell_amount))
                         executed_orders.append(order_id)
-                        position_volume[code] -= sell_amount
+                        position_volume[normalized_code] -= sell_amount
                 else:
-                    print('Warning: Insufficient position for {} to sell {} shares'.format(code, order_values))
+                    print('Warning: Insufficient position for {} (normalized: {}) to sell {} shares'.format(code, normalized_code, order_values))
         
         except Exception as e:
-            print('Failed to execute order {}: {}'.format(code, e))
+            print('Failed to execute order {} (normalized: {}): {}'.format(code, normalized_code, e))
             # If order execution failed, try to revert the database status
             revert_order_status(order_id)
     
@@ -256,3 +282,5 @@ def start_continuous_monitoring(ContextInfo):
 
 def handlebar(ContextInfo):
     pass
+
+
