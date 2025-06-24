@@ -19,13 +19,15 @@ def initialize(context):
                    close_today_commission=0, min_commission=0), type='stock')
     
     # 策略参数
-    g.max_position_count = 2  # 最大持仓数量
-    g.single_position_ratio = 0.5  # 单股仓位比例（10%）
-    g.lookback_days = 60  # 历史低位回看天数
-    g.low_open_min = -0.09  # 低开最小幅度 -5%（放宽）
-    g.low_open_max = 0   # 低开最大幅度 +2%（允许小幅高开）
-    g.stop_loss_ratio = -0.03  # 止损比例 -5%
-    g.holding_days = 5  # 最大持有天数
+    g.max_position_count = 5  # 最大持仓数量（分散风险）
+    g.single_position_ratio = 0.2  # 单股仓位比例（20%）
+    g.lookback_days = 30  # 历史低位回看天数（缩短周期，更敏感）
+    g.low_open_min = -0.06  # 低开最小幅度 -6%
+    g.low_open_max = -0.01   # 低开最大幅度 -1%（严格低开）
+    g.stop_loss_ratio = -0.06  # 止损比例 -6%（放宽止损）
+    g.take_profit_ratio = 0.08  # 止盈比例 +8%
+    g.holding_days = 3  # 最大持有天数（缩短持有期）
+    g.min_profit_hold_days = 1  # 盈利时最少持有天数
     
     # 全局变量
     g.candidate_stocks = []  # 候选股票池
@@ -47,14 +49,14 @@ def initialize(context):
     run_daily(stop_loss_check, time='14:00')  # 止损检查4
     run_daily(end_day_sell_check, time='14:50')  # 尾盘卖出检查
     
-    log.info("=== 严格首板低开策略启动 ===")
+    log.info("=== 优化版严格首板低开策略启动 ===")
     log.info(f"最大持仓: {g.max_position_count}只")
     log.info(f"单股仓位: {g.single_position_ratio*100}%")
     log.info(f"历史低位回看: {g.lookback_days}天")
     log.info(f"严格低开区间: {g.low_open_min*100}% ~ {g.low_open_max*100}%")
-    log.info(f"止损线: {g.stop_loss_ratio*100}%")
-    log.info(f"最大持有天数: {g.holding_days}天")
-    log.info("策略特点: 只买入昨日首板且今日严格低开的历史低位股票")
+    log.info(f"止损线: {g.stop_loss_ratio*100}% | 止盈线: {g.take_profit_ratio*100}%")
+    log.info(f"最大持有天数: {g.holding_days}天 | 盈利最少持有: {g.min_profit_hold_days}天")
+    log.info("策略特点: 首板低开+动态止盈止损+灵活持仓管理")
 
 def prepare_trading_day(context):
     """准备交易日"""
@@ -291,10 +293,10 @@ def morning_buy_check(context):
         g.morning_buy_done = True
 
 def stop_loss_check(context):
-    """止损检查"""
+    """止损止盈检查"""
     try:
         current_time = context.current_dt
-        log.info(f"=== {current_time.strftime('%H:%M')} 止损检查 ===")
+        log.info(f"=== {current_time.strftime('%H:%M')} 止损止盈检查 ===")
         
         current_data = get_current_data()
         sell_count = 0
@@ -317,31 +319,49 @@ def stop_loss_check(context):
                 cost_price = position.avg_cost
                 return_rate = (current_price - cost_price) / cost_price
                 
+                # 获取持有天数
+                buy_info = g.buy_records.get(stock, {})
+                buy_date = buy_info.get('buy_date')
+                holding_days = (context.current_dt.date() - buy_date).days if buy_date else 0
+                
+                sell_reason = None
+                
                 # 止损检查
                 if return_rate <= g.stop_loss_ratio:
+                    sell_reason = f"止损"
+                # 止盈检查
+                elif return_rate >= g.take_profit_ratio:
+                    sell_reason = f"止盈"
+                # 盈利但未达到止盈线，检查是否满足最少持有天数
+                elif return_rate > 0 and holding_days >= g.min_profit_hold_days:
+                    # 如果盈利超过3%且持有超过1天，也可以考虑卖出
+                    if return_rate >= 0.03:
+                        sell_reason = f"盈利锁定"
+                
+                if sell_reason:
                     order_result = order_target(stock, 0)
                     if order_result:
-                        log.info(f"止损卖出: {stock}, 成本: {cost_price:.2f}, "
-                               f"现价: {current_price:.2f}, 亏损: {return_rate*100:.2f}%")
+                        log.info(f"{sell_reason}卖出: {stock}, 成本: {cost_price:.2f}, "
+                               f"现价: {current_price:.2f}, 收益率: {return_rate*100:.2f}%, 持有{holding_days}天")
                         sell_count += 1
                         
                         # 清除买入记录
                         if stock in g.buy_records:
                             del g.buy_records[stock]
                     else:
-                        log.error(f"止损卖出失败: {stock}")
+                        log.error(f"{sell_reason}卖出失败: {stock}")
                         
             except Exception as e:
-                log.error(f"处理股票 {stock} 止损时出错: {e}")
+                log.error(f"处理股票 {stock} 止损止盈时出错: {e}")
                 continue
         
         if sell_count > 0:
-            log.info(f"止损卖出 {sell_count} 只股票")
+            log.info(f"止损止盈卖出 {sell_count} 只股票")
         else:
-            log.info("无需止损")
+            log.info("无需止损止盈")
             
     except Exception as e:
-        log.error(f"止损检查时出错: {e}")
+        log.error(f"止损止盈检查时出错: {e}")
 
 def end_day_sell_check(context):
     """尾盘卖出检查"""
@@ -383,11 +403,15 @@ def end_day_sell_check(context):
                 
                 sell_reason = None
                 
-                # 卖出条件判断
+                # 卖出条件判断（更加灵活）
                 if holding_days >= g.holding_days:
                     sell_reason = f"持有{holding_days}天到期"
-                elif return_rate < 0:
-                    sell_reason = f"已亏损{return_rate*100:.2f}%"
+                elif return_rate < -0.02 and holding_days >= 2:
+                    # 亏损超过2%且持有超过2天
+                    sell_reason = f"持有期亏损{return_rate*100:.2f}%"
+                elif return_rate > 0.05:
+                    # 盈利超过5%，尾盘获利了结
+                    sell_reason = f"尾盘获利了结{return_rate*100:.2f}%"
                 
                 if sell_reason:
                     order_result = order_target(stock, 0)
