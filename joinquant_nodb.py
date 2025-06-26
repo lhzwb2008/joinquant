@@ -23,8 +23,11 @@ def initialize(context):
     g.high_limit_list = []
 
     run_daily(prepare_stock_list, time='9:05')
-    run_weekly(weekly_adjustment, weekday=1, time='13:55')
+    run_weekly(weekly_adjustment, weekday=1, time='14:00')
     run_daily(check_limit_up, time='13:55')
+
+
+
 
 def get_dividend_ratio_filter_list(context, stock_list, sort, p1, p2):
     time1 = context.previous_date
