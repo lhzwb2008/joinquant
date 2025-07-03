@@ -144,8 +144,8 @@ def revert_order_status(order_id):
 def execute_trade_orders(ContextInfo):
     current_time = datetime.now().time()
     
-    day_start_time = dt_time(9, 30)
-    day_end_time = dt_time(15, 00)
+    day_start_time = dt_time(0, 0)
+    day_end_time = dt_time(23, 59)
     
     if not (day_start_time <= current_time <= day_end_time):
         return False
