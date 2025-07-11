@@ -144,8 +144,8 @@ def revert_order_status(order_id):
 def execute_trade_orders(ContextInfo):
     current_time = datetime.now().time()
     
-    day_start_time = dt_time(0, 0)
-    day_end_time = dt_time(23, 59)
+    day_start_time = dt_time(9, 30)
+    day_end_time = dt_time(15, 00)
     
     if not (day_start_time <= current_time <= day_end_time):
         return False
@@ -166,6 +166,11 @@ def execute_trade_orders(ContextInfo):
         return False
     
     print('Found {} pending orders'.format(len(orders_df)))
+    
+    # Check order quantity limit
+    if len(orders_df) >= 10:
+        print('WARNING: Found {} pending orders (>= 10), skipping execution for safety! This may indicate an abnormal batch order situation.'.format(len(orders_df)))
+        return False
     
     position_info = get_trade_detail_data(ContextInfo.accID, 'stock', 'position')
     position_code = []
@@ -243,6 +248,8 @@ def execute_trade_orders(ContextInfo):
                         position_volume[normalized_code] -= sell_amount
                 else:
                     print('Warning: Insufficient position for {} (normalized: {}) to sell {} shares'.format(code, normalized_code, order_values))
+            
+
         
         except Exception as e:
             print('Failed to execute order {} (normalized: {}): {}'.format(code, normalized_code, e))
@@ -254,19 +261,10 @@ def execute_trade_orders(ContextInfo):
 def start_continuous_monitoring(ContextInfo):
     print('Start continuous monitoring for trading signals...')
     
-    last_cleanup_date = datetime.now().date()
-    
     while True:
         try:
             current_time = datetime.now().time()
             current_date = datetime.now().date()
-            
-            cleanup_time = dt_time(15, 35)
-            if (current_time >= cleanup_time and 
-                current_date > last_cleanup_date):
-                print('Execute daily data cleanup...')
-                delete_data()
-                last_cleanup_date = current_date
             
             if execute_trade_orders(ContextInfo):
                 print('Trade orders executed')
