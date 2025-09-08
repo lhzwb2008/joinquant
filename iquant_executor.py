@@ -192,71 +192,96 @@ def execute_trade_orders(ContextInfo):
     
     executed_orders = []
     
+    # Separate buy and sell orders
+    sell_orders = []
+    buy_orders = []
+    
     for idx, order in orders_df.iterrows():
-        code = order['code']
-        # Normalize order stock code
-        normalized_code = normalize_stock_code(code)
-        print('Processing order: {} -> normalized: {}'.format(code, normalized_code))
         ordertype = order['ordertype']
-        order_values = int(order['order_values'])
-        # Use 'pk' as the primary key field
-        order_id = order.get('pk', None)
-        
-        if not order_id:
-            print('Warning: Order missing PK, skipping')
-            continue
-        
-        # Mark order as executed BEFORE placing order to prevent duplicates
-        if not mark_order_as_executed(order_id):
-            print('Failed to mark order {} as executed, skipping to prevent duplicates'.format(order_id))
-            continue
-        
-        # Apply execution ratio
-        original_order_values = order_values
-        order_values = int(order_values * EXECUTION_RATIO)
-        
-        # Round down to nearest 100
-        order_values = (order_values // 100) * 100
-        
-        # Skip if less than 100 shares
-        if order_values < 100:
-            print('Order {} skipped: {} shares after ratio adjustment is less than 100'.format(
-                code, int(original_order_values * EXECUTION_RATIO)))
-            # Revert the order status since we're not executing it
-            revert_order_status(order_id)
-            continue
-        
-        print('Order {} adjusted from {} to {} shares (ratio: {}%)'.format(
-            code, original_order_values, order_values, int(EXECUTION_RATIO * 100)))
-        
-        try:
-            if ordertype == u'\u4e70':  # Buy
-                if order_values > 0:
-                    # Use normalized code for trading
-                    result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 2, 0, order_values, '', 2, '', ContextInfo)
-                    print('Execute buy order: {} x {} shares'.format(normalized_code, order_values))
-                    executed_orders.append(order_id)
-            
-            elif ordertype == u'\u5356':  # Sell
-                # Use normalized code to check position
-                if normalized_code in position_volume and position_volume[normalized_code] > 0:
-                    sell_amount = min(order_values, position_volume[normalized_code])
-                    if sell_amount > 0:
-                        result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 8, 0, sell_amount, '', 2, '', ContextInfo)
-                        print('Execute sell order: {} x {} shares'.format(normalized_code, sell_amount))
-                        executed_orders.append(order_id)
-                        position_volume[normalized_code] -= sell_amount
-                else:
-                    print('Warning: Insufficient position for {} (normalized: {}) to sell {} shares'.format(code, normalized_code, order_values))
-            
-
-        
-        except Exception as e:
-            print('Failed to execute order {} (normalized: {}): {}'.format(code, normalized_code, e))
-            # If order execution failed, try to revert the database status
-            revert_order_status(order_id)
+        if ordertype == u'\u5356':  # Sell
+            sell_orders.append(order)
+        elif ordertype == u'\u4e70':  # Buy
+            buy_orders.append(order)
+    
+    # Process sell orders first
+    print('Processing {} sell orders first'.format(len(sell_orders)))
+    for order in sell_orders:
+        order_id = process_single_order(order, ContextInfo, position_volume, executed_orders, sell_direction, buy_direction)
+    
+    # Wait 3 seconds before processing buy orders
+    if len(buy_orders) > 0:
+        print('Waiting 3 seconds before processing buy orders...')
+        time.sleep(3)
+        print('Processing {} buy orders'.format(len(buy_orders)))
+        for order in buy_orders:
+            order_id = process_single_order(order, ContextInfo, position_volume, executed_orders, sell_direction, buy_direction)
     
     return len(executed_orders) > 0
+
+def process_single_order(order, ContextInfo, position_volume, executed_orders, sell_direction, buy_direction):
+    """Process a single order (buy or sell)"""
+    code = order['code']
+    # Normalize order stock code
+    normalized_code = normalize_stock_code(code)
+    print('Processing order: {} -> normalized: {}'.format(code, normalized_code))
+    ordertype = order['ordertype']
+    order_values = int(order['order_values'])
+    # Use 'pk' as the primary key field
+    order_id = order.get('pk', None)
+    
+    if not order_id:
+        print('Warning: Order missing PK, skipping')
+        return None
+    
+    # Mark order as executed BEFORE placing order to prevent duplicates
+    if not mark_order_as_executed(order_id):
+        print('Failed to mark order {} as executed, skipping to prevent duplicates'.format(order_id))
+        return None
+    
+    # Apply execution ratio
+    original_order_values = order_values
+    order_values = int(order_values * EXECUTION_RATIO)
+    
+    # Round down to nearest 100
+    order_values = (order_values // 100) * 100
+    
+    # Skip if less than 100 shares
+    if order_values < 100:
+        print('Order {} skipped: {} shares after ratio adjustment is less than 100'.format(
+            code, int(original_order_values * EXECUTION_RATIO)))
+        # Revert the order status since we're not executing it
+        revert_order_status(order_id)
+        return None
+    
+    print('Order {} adjusted from {} to {} shares (ratio: {}%)'.format(
+        code, original_order_values, order_values, int(EXECUTION_RATIO * 100)))
+    
+    try:
+        if ordertype == u'\u4e70':  # Buy
+            if order_values > 0:
+                # Use normalized code for trading
+                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 2, 0, order_values, '', 2, '', ContextInfo)
+                print('Execute buy order: {} x {} shares'.format(normalized_code, order_values))
+                executed_orders.append(order_id)
+        
+        elif ordertype == u'\u5356':  # Sell
+            # Use normalized code to check position
+            if normalized_code in position_volume and position_volume[normalized_code] > 0:
+                sell_amount = min(order_values, position_volume[normalized_code])
+                if sell_amount > 0:
+                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 8, 0, sell_amount, '', 2, '', ContextInfo)
+                    print('Execute sell order: {} x {} shares'.format(normalized_code, sell_amount))
+                    executed_orders.append(order_id)
+                    position_volume[normalized_code] -= sell_amount
+            else:
+                print('Warning: Insufficient position for {} (normalized: {}) to sell {} shares'.format(code, normalized_code, order_values))
+        
+    except Exception as e:
+        print('Failed to execute order {} (normalized: {}): {}'.format(code, normalized_code, e))
+        # If order execution failed, try to revert the database status
+        revert_order_status(order_id)
+    
+    return order_id
 
 def start_continuous_monitoring(ContextInfo):
     print('Start continuous monitoring for trading signals...')
