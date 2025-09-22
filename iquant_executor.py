@@ -260,7 +260,7 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
         if ordertype == u'\u4e70':  # Buy
             if order_values > 0:
                 # Use normalized code for trading
-                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 2, 0, order_values, '', 2, '', ContextInfo)
+                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 4, 0, order_values, '', 2, '', ContextInfo)
                 print('Execute buy order: {} x {} shares'.format(normalized_code, order_values))
                 executed_orders.append(order_id)
         
