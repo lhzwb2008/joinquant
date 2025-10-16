@@ -269,7 +269,7 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
             if normalized_code in position_volume and position_volume[normalized_code] > 0:
                 sell_amount = min(order_values, position_volume[normalized_code])
                 if sell_amount > 0:
-                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 8, 0, sell_amount, '', 2, '', ContextInfo)
+                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 4, 0, sell_amount, '', 2, '', ContextInfo)
                     print('Execute sell order: {} x {} shares'.format(normalized_code, sell_amount))
                     executed_orders.append(order_id)
                     position_volume[normalized_code] -= sell_amount
