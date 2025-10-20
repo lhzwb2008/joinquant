@@ -7,6 +7,20 @@ from datetime import datetime, time as dt_time
 # Trading configuration
 EXECUTION_RATIO = 1  # Execute ratio of original order quantity (0.1 = 10%)
 
+# Price type configuration - based on API documentation prType parameter
+PRICE_TYPE = 12  # Recommended: 12=market price, ensures immediate execution
+"""
+prType price type options:
+0-10: Sell5 to Buy5 price levels
+5: Latest price (may not execute immediately)
+12: Market price (recommended, immediate execution)
+14: Counter price (buy uses sell1, sell uses buy1)
+
+If market order still fails, try:
+PRICE_TYPE = 5   # Latest price
+PRICE_TYPE = 14  # Counter price
+"""
+
 def init(ContextInfo):
     global position_flag, delete_flag, order_flag
     
@@ -18,6 +32,7 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.accID)
     
     print('init - start continuous monitoring mode (EXECUTION RATIO: {}%)'.format(int(EXECUTION_RATIO * 100)))
+    print('Price type: {} (12=market, 5=latest, 14=counter)'.format(PRICE_TYPE))
     
     start_continuous_monitoring(ContextInfo)
 
@@ -259,9 +274,9 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
     try:
         if ordertype == u'\u4e70':  # Buy
             if order_values > 0:
-                # Use normalized code for trading
-                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 4, 0, order_values, '', 2, '', ContextInfo)
-                print('Execute buy order: {} x {} shares'.format(normalized_code, order_values))
+                # Use market price for immediate execution (prType=12)
+                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, PRICE_TYPE, 0, order_values, '', 2, '', ContextInfo)
+                print('Execute buy order (prType={}): {} x {} shares'.format(PRICE_TYPE, normalized_code, order_values))
                 executed_orders.append(order_id)
         
         elif ordertype == u'\u5356':  # Sell
@@ -269,8 +284,8 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
             if normalized_code in position_volume and position_volume[normalized_code] > 0:
                 sell_amount = min(order_values, position_volume[normalized_code])
                 if sell_amount > 0:
-                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 4, 0, sell_amount, '', 2, '', ContextInfo)
-                    print('Execute sell order: {} x {} shares'.format(normalized_code, sell_amount))
+                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, PRICE_TYPE, 0, sell_amount, '', 2, '', ContextInfo)
+                    print('Execute sell order (prType={}): {} x {} shares'.format(PRICE_TYPE, normalized_code, sell_amount))
                     executed_orders.append(order_id)
                     position_volume[normalized_code] -= sell_amount
             else:
