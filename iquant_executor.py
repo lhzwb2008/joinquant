@@ -17,9 +17,9 @@ prType price type options:
 1: Sell4 price
 2: Sell3 price  
 3: Sell2 price
-4: Sell1 price (counter price for buying) ★ RECOMMENDED FOR BUY
+4: Sell1 price (counter price for buying) [RECOMMENDED FOR BUY]
 5: Latest price
-6: Buy1 price (counter price for selling) ★ RECOMMENDED FOR SELL
+6: Buy1 price (counter price for selling) [RECOMMENDED FOR SELL]
 7: Buy2 price
 8: Buy3 price
 9: Buy4 price
