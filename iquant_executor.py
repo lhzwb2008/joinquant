@@ -7,18 +7,32 @@ from datetime import datetime, time as dt_time
 # Trading configuration
 EXECUTION_RATIO = 1  # Execute ratio of original order quantity (0.1 = 10%)
 
-# Price type configuration - based on API documentation prType parameter
-PRICE_TYPE = 12  # Recommended: 12=market price, ensures immediate execution
+# Price type configuration - based on API documentation prType parameter  
+BUY_PRICE_TYPE = 4   # Sell1 price (counter price for buying - best for quick fill)
+SELL_PRICE_TYPE = 6  # Buy1 price (counter price for selling - best for quick fill)
+QUICK_TRADE = 2      # 2=force immediate execution (required for non-bar-driven strategies)
 """
 prType price type options:
-0-10: Sell5 to Buy5 price levels
-5: Latest price (may not execute immediately)
-12: Market price (recommended, immediate execution)
-14: Counter price (buy uses sell1, sell uses buy1)
+0: Sell5 price (for buying - most aggressive)
+1: Sell4 price
+2: Sell3 price  
+3: Sell2 price
+4: Sell1 price (counter price for buying) ★ RECOMMENDED FOR BUY
+5: Latest price
+6: Buy1 price (counter price for selling) ★ RECOMMENDED FOR SELL
+7: Buy2 price
+8: Buy3 price
+9: Buy4 price
+10: Buy5 price (for selling - most aggressive)
+11: Specified price (must provide price parameter)
+12: Market price
+14: Counter price (auto-select best counter price)
 
-If market order still fails, try:
-PRICE_TYPE = 5   # Latest price
-PRICE_TYPE = 14  # Counter price
+Why quickTrade=2 is required:
+- Our strategy uses continuous monitoring (while True loop) instead of bar-driven handlebar()
+- quickTrade=0: waits for K-line completion (not applicable to our loop)
+- quickTrade=1: requires is_last_bar()==True (not satisfied in our case)
+- quickTrade=2: forces immediate execution regardless of bar state (perfect for our use case)
 """
 
 def init(ContextInfo):
@@ -32,7 +46,7 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.accID)
     
     print('init - start continuous monitoring mode (EXECUTION RATIO: {}%)'.format(int(EXECUTION_RATIO * 100)))
-    print('Price type: {} (12=market, 5=latest, 14=counter)'.format(PRICE_TYPE))
+    print('Price config: BUY_TYPE={} (Sell1), SELL_TYPE={} (Buy1), QUICK_TRADE={} (force immediate)'.format(BUY_PRICE_TYPE, SELL_PRICE_TYPE, QUICK_TRADE))
     
     start_continuous_monitoring(ContextInfo)
 
@@ -274,9 +288,9 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
     try:
         if ordertype == u'\u4e70':  # Buy
             if order_values > 0:
-                # Use market price for immediate execution (prType=12)
-                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, PRICE_TYPE, 0, order_values, '', 2, '', ContextInfo)
-                print('Execute buy order (prType={}): {} x {} shares'.format(PRICE_TYPE, normalized_code, order_values))
+                # Use Sell1 price for buying (prType=4)
+                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, BUY_PRICE_TYPE, 0, order_values, '', QUICK_TRADE, '', ContextInfo)
+                print('Execute buy order (prType={}): {} x {} shares'.format(BUY_PRICE_TYPE, normalized_code, order_values))
                 executed_orders.append(order_id)
         
         elif ordertype == u'\u5356':  # Sell
@@ -284,8 +298,8 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
             if normalized_code in position_volume and position_volume[normalized_code] > 0:
                 sell_amount = min(order_values, position_volume[normalized_code])
                 if sell_amount > 0:
-                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, PRICE_TYPE, 0, sell_amount, '', 2, '', ContextInfo)
-                    print('Execute sell order (prType={}): {} x {} shares'.format(PRICE_TYPE, normalized_code, sell_amount))
+                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, SELL_PRICE_TYPE, 0, sell_amount, '', QUICK_TRADE, '', ContextInfo)
+                    print('Execute sell order (prType={}): {} x {} shares'.format(SELL_PRICE_TYPE, normalized_code, sell_amount))
                     executed_orders.append(order_id)
                     position_volume[normalized_code] -= sell_amount
             else:
