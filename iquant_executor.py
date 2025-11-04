@@ -8,9 +8,12 @@ from datetime import datetime, time as dt_time
 EXECUTION_RATIO = 1  # Execute ratio of original order quantity (0.1 = 10%)
 
 # Price type configuration - based on API documentation prType parameter  
-BUY_PRICE_TYPE = 4   # Sell1 price (counter price for buying - best for quick fill)
-SELL_PRICE_TYPE = 6  # Buy1 price (counter price for selling - best for quick fill)
-QUICK_TRADE = 2      # 2=force immediate execution (required for non-bar-driven strategies)
+# SOLUTION: Use price from database (JoinQuant's last_price) +/- offset
+# Database price is from JoinQuant's real-time data, much more reliable than iQuant's get_full_tick()
+BUY_PRICE_TYPE = 11   # Specified price: use DB price + offset
+SELL_PRICE_TYPE = 11  # Specified price: use DB price - offset
+QUICK_TRADE = 2       # 2=force immediate execution (required for non-bar-driven strategies)
+PRICE_OFFSET = 0.002  # 0.2% price offset to ensure order execution (buy higher, sell lower)
 """
 prType price type options:
 0: Sell5 price (for buying - most aggressive)
@@ -46,7 +49,9 @@ def init(ContextInfo):
     ContextInfo.set_account(ContextInfo.accID)
     
     print('init - start continuous monitoring mode (EXECUTION RATIO: {}%)'.format(int(EXECUTION_RATIO * 100)))
-    print('Price config: BUY_TYPE={} (Sell1), SELL_TYPE={} (Buy1), QUICK_TRADE={} (force immediate)'.format(BUY_PRICE_TYPE, SELL_PRICE_TYPE, QUICK_TRADE))
+    print('Price config: BUY_TYPE={} (DB_price+{}%), SELL_TYPE={} (DB_price-{}%), QUICK_TRADE={}'.format(
+        BUY_PRICE_TYPE, PRICE_OFFSET*100, SELL_PRICE_TYPE, PRICE_OFFSET*100, QUICK_TRADE))
+    print('NOTE: Using price from JoinQuant database (last_price field) +/- 0.2%')
     
     start_continuous_monitoring(ContextInfo)
 
@@ -285,12 +290,27 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
     print('Order {} adjusted from {} to {} shares (ratio: {}%)'.format(
         code, original_order_values, order_values, int(EXECUTION_RATIO * 100)))
     
+    # Get price from database (JoinQuant's last_price)
+    db_price = order.get('price', None)
+    if not db_price or db_price <= 0:
+        print('ERROR: Invalid price from database: {}, skip order {}'.format(db_price, order_id))
+        revert_order_status(order_id)
+        return None
+    
+    print('JoinQuant last_price from DB: {}'.format(db_price))
+    
     try:
         if ordertype == u'\u4e70':  # Buy
             if order_values > 0:
-                # Use Sell1 price for buying (prType=4)
-                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, BUY_PRICE_TYPE, 0, order_values, '', QUICK_TRADE, '', ContextInfo)
-                print('Execute buy order (prType={}): {} x {} shares'.format(BUY_PRICE_TYPE, normalized_code, order_values))
+                # Calculate buy price: DB_price * (1 + PRICE_OFFSET)
+                buy_price = round(db_price * (1 + PRICE_OFFSET), 2)
+                print('Buy order: DB_price={}, calculated buy_price={} (+{}%)'.format(
+                    db_price, buy_price, PRICE_OFFSET*100))
+                
+                result = passorder(buy_direction, 1101, ContextInfo.accID, normalized_code, 
+                                 BUY_PRICE_TYPE, buy_price, order_values, '', QUICK_TRADE, '', ContextInfo)
+                print('Execute buy order: {} x {} shares @ {} (prType={})'.format(
+                    normalized_code, order_values, buy_price, BUY_PRICE_TYPE))
                 executed_orders.append(order_id)
         
         elif ordertype == u'\u5356':  # Sell
@@ -298,8 +318,15 @@ def process_single_order(order, ContextInfo, position_volume, executed_orders, s
             if normalized_code in position_volume and position_volume[normalized_code] > 0:
                 sell_amount = min(order_values, position_volume[normalized_code])
                 if sell_amount > 0:
-                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, SELL_PRICE_TYPE, 0, sell_amount, '', QUICK_TRADE, '', ContextInfo)
-                    print('Execute sell order (prType={}): {} x {} shares'.format(SELL_PRICE_TYPE, normalized_code, sell_amount))
+                    # Calculate sell price: DB_price * (1 - PRICE_OFFSET)
+                    sell_price = round(db_price * (1 - PRICE_OFFSET), 2)
+                    print('Sell order: DB_price={}, calculated sell_price={} (-{}%)'.format(
+                        db_price, sell_price, PRICE_OFFSET*100))
+                    
+                    result = passorder(sell_direction, 1101, ContextInfo.accID, normalized_code, 
+                                     SELL_PRICE_TYPE, sell_price, sell_amount, '', QUICK_TRADE, '', ContextInfo)
+                    print('Execute sell order: {} x {} shares @ {} (prType={})'.format(
+                        normalized_code, sell_amount, sell_price, SELL_PRICE_TYPE))
                     executed_orders.append(order_id)
                     position_volume[normalized_code] -= sell_amount
             else:
